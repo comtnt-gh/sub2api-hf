@@ -224,6 +224,39 @@ curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install
 
 ---
 
+### 方式三：Hugging Face Docker Space
+
+源码由 GitHub 仓库托管并通过 GitHub Actions 构建 `ghcr.io/comtnt-gh/sub2api-hf:latest`。Hugging Face Space 仓库建议只保留 `README.md`、`Dockerfile`、`.gitattributes`，其中 `Dockerfile` 直接引用 GHCR 镜像：
+
+```dockerfile
+FROM ghcr.io/comtnt-gh/sub2api-hf:latest
+```
+
+镜像会在同一个容器内启动 Sub2API 和内置 Redis，PostgreSQL 使用外部 DSN（例如 Supabase）。Space 名称建议使用 `sub2api-hf`。
+
+在 Hugging Face Space 的变量或 Secrets 中配置：
+
+```bash
+AUTO_SETUP=true
+DATABASE_URL=postgresql://user:password@host:6543/postgres?sslmode=require
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8080
+SERVER_MODE=release
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+EMBEDDED_REDIS=true
+AUTO_SETUP_MIGRATION_TIMEOUT_SECONDS=600
+AUTO_SETUP_ADMIN_TIMEOUT_SECONDS=30
+MIGRATIONS_DISABLE_ADVISORY_LOCK=true
+JWT_SECRET=<32-byte-hex-secret>
+TOTP_ENCRYPTION_KEY=<32-byte-hex-secret>
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=<initial-admin-password>
+TZ=Asia/Shanghai
+```
+
+数据库密码、Hugging Face Token、Supabase Token、JWT 密钥和管理员密码必须放在 Hugging Face **Secrets** 中，不要提交到仓库。内置 Redis 数据是临时缓存，Space 重启后允许丢失；持久化业务数据以外部 PostgreSQL 为准。使用 Supabase 6543 pooler 这类外部连接池时，公开 Space 单副本可设置 `MIGRATIONS_DISABLE_ADVISORY_LOCK=true`，避免 PostgreSQL session advisory lock 与事务池不兼容。
+
 ### 方式二：Docker Compose（推荐）
 
 使用 Docker Compose 部署，包含 PostgreSQL 和 Redis 容器。

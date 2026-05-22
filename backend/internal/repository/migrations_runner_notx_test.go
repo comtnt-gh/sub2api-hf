@@ -62,7 +62,7 @@ func TestApplyMigrationsFS_NonTransactionalMigration(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_t_a ON t\\(a\\)").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
+	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\) ON CONFLICT \\(filename\\) DO NOTHING").
 		WithArgs("001_add_idx_notx.sql", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
@@ -93,7 +93,7 @@ func TestApplyMigrationsFS_NonTransactionalMigration_MultiStatements(t *testing.
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_t_b ON t\\(b\\)").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
+	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\) ON CONFLICT \\(filename\\) DO NOTHING").
 		WithArgs("001_add_multi_idx_notx.sql", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
@@ -170,7 +170,7 @@ func TestApplyMigrationsFS_PaymentOrdersOutTradeNoUniqueMigration_DropsInvalidIn
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DROP INDEX CONCURRENTLY IF EXISTS paymentorder_out_trade_no").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
+	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\) ON CONFLICT \\(filename\\) DO NOTHING").
 		WithArgs("120_enforce_payment_orders_out_trade_no_unique_notx.sql", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
@@ -206,7 +206,7 @@ func TestApplyMigrationsFS_TransactionalMigration(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("ALTER TABLE t ADD COLUMN name TEXT").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
+	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\) ON CONFLICT \\(filename\\) DO NOTHING").
 		WithArgs("001_add_col.sql", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()

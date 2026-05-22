@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -82,12 +83,13 @@ type SetupConfig struct {
 }
 
 type DatabaseConfig struct {
-	Host     string `json:"host" yaml:"host"`
-	Port     int    `json:"port" yaml:"port"`
-	User     string `json:"user" yaml:"user"`
-	Password string `json:"password" yaml:"password"`
-	DBName   string `json:"dbname" yaml:"dbname"`
-	SSLMode  string `json:"sslmode" yaml:"sslmode"`
+	Host        string `json:"host" yaml:"host"`
+	Port        int    `json:"port" yaml:"port"`
+	User        string `json:"user" yaml:"user"`
+	Password    string `json:"password" yaml:"password"`
+	DBName      string `json:"dbname" yaml:"dbname"`
+	SSLMode     string `json:"sslmode" yaml:"sslmode"`
+	ExternalDSN bool   `json:"-" yaml:"-"`
 }
 
 type RedisConfig struct {
@@ -162,6 +164,10 @@ func NeedsSetup() bool {
 
 // TestDatabaseConnection tests the database connection and creates database if not exists
 func TestDatabaseConnection(cfg *DatabaseConfig) error {
+	if cfg.ExternalDSN {
+		return pingTargetDatabase(cfg)
+	}
+
 	// First, connect to the default 'postgres' database to check/create target database
 	defaultDSN := fmt.Sprintf(
 		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
@@ -214,10 +220,11 @@ func TestDatabaseConnection(cfg *DatabaseConfig) error {
 	}
 	db = nil
 
-	targetDSN := fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.DBName, cfg.SSLMode,
-	)
+	return pingTargetDatabase(cfg)
+}
+
+func pingTargetDatabase(cfg *DatabaseConfig) error {
+	targetDSN := databaseDSN(cfg)
 
 	targetDB, err := sql.Open("postgres", targetDSN)
 	if err != nil {
@@ -238,6 +245,19 @@ func TestDatabaseConnection(cfg *DatabaseConfig) error {
 	}
 
 	return nil
+}
+
+func databaseDSN(cfg *DatabaseConfig) string {
+	if cfg.Password == "" {
+		return fmt.Sprintf(
+			"host=%s port=%d user=%s dbname=%s sslmode=%s binary_parameters=yes",
+			cfg.Host, cfg.Port, cfg.User, cfg.DBName, cfg.SSLMode,
+		)
+	}
+	return fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s binary_parameters=yes",
+		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.DBName, cfg.SSLMode,
+	)
 }
 
 // TestRedisConnection tests the Redis connection
@@ -328,13 +348,7 @@ func createInstallLock() error {
 }
 
 func initializeDatabase(cfg *SetupConfig) error {
-	dsn := fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Database.Host, cfg.Database.Port, cfg.Database.User,
-		cfg.Database.Password, cfg.Database.DBName, cfg.Database.SSLMode,
-	)
-
-	db, err := sql.Open("postgres", dsn)
+	db, err := sql.Open("postgres", databaseDSN(&cfg.Database))
 	if err != nil {
 		return err
 	}
@@ -345,19 +359,21 @@ func initializeDatabase(cfg *SetupConfig) error {
 		}
 	}()
 
-	migrationCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	migrationCtx, cancel := context.WithTimeout(context.Background(), setupMigrationTimeout())
 	defer cancel()
 	return repository.ApplyMigrations(migrationCtx, db)
 }
 
-func createAdminUser(cfg *SetupConfig) (bool, string, error) {
-	dsn := fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Database.Host, cfg.Database.Port, cfg.Database.User,
-		cfg.Database.Password, cfg.Database.DBName, cfg.Database.SSLMode,
-	)
+func setupMigrationTimeout() time.Duration {
+	seconds := getEnvIntOrDefault("AUTO_SETUP_MIGRATION_TIMEOUT_SECONDS", 600)
+	if seconds <= 0 {
+		seconds = 600
+	}
+	return time.Duration(seconds) * time.Second
+}
 
-	db, err := sql.Open("postgres", dsn)
+func createAdminUser(cfg *SetupConfig) (bool, string, error) {
+	db, err := sql.Open("postgres", databaseDSN(&cfg.Database))
 	if err != nil {
 		return false, "", err
 	}
@@ -369,7 +385,7 @@ func createAdminUser(cfg *SetupConfig) (bool, string, error) {
 	}()
 
 	// 使用超时上下文避免安装流程因数据库异常而长时间阻塞。
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), setupAdminBootstrapTimeout())
 	defer cancel()
 
 	var totalUsers int64
@@ -426,6 +442,14 @@ func createAdminUser(cfg *SetupConfig) (bool, string, error) {
 		return false, "", err
 	}
 	return true, decision.reason, nil
+}
+
+func setupAdminBootstrapTimeout() time.Duration {
+	seconds := getEnvIntOrDefault("AUTO_SETUP_ADMIN_TIMEOUT_SECONDS", 30)
+	if seconds <= 0 {
+		seconds = 30
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func writeConfigFile(cfg *SetupConfig) error {
@@ -531,35 +555,19 @@ func getEnvIntOrDefault(key string, defaultValue int) int {
 	return defaultValue
 }
 
-// AutoSetupFromEnv performs automatic setup using environment variables
-// This is designed for Docker deployment where all config is passed via env vars
-func AutoSetupFromEnv() error {
-	logger.LegacyPrintf("setup", "%s", "Auto setup enabled, configuring from environment variables...")
-	logger.LegacyPrintf("setup", "Data directory: %s", GetDataDir())
-
-	// Get timezone from TZ or TIMEZONE env var (TZ is standard for Docker)
-	tz := getEnvOrDefault("TZ", "")
-	if tz == "" {
-		tz = getEnvOrDefault("TIMEZONE", "Asia/Shanghai")
+func setupConfigFromEnv(tz string) (*SetupConfig, error) {
+	databaseCfg, err := databaseConfigFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	redisCfg, err := redisConfigFromEnv()
+	if err != nil {
+		return nil, err
 	}
 
-	// Build config from environment variables
-	cfg := &SetupConfig{
-		Database: DatabaseConfig{
-			Host:     getEnvOrDefault("DATABASE_HOST", "localhost"),
-			Port:     getEnvIntOrDefault("DATABASE_PORT", 5432),
-			User:     getEnvOrDefault("DATABASE_USER", "postgres"),
-			Password: getEnvOrDefault("DATABASE_PASSWORD", ""),
-			DBName:   getEnvOrDefault("DATABASE_DBNAME", "sub2api"),
-			SSLMode:  getEnvOrDefault("DATABASE_SSLMODE", "disable"),
-		},
-		Redis: RedisConfig{
-			Host:      getEnvOrDefault("REDIS_HOST", "localhost"),
-			Port:      getEnvIntOrDefault("REDIS_PORT", 6379),
-			Password:  getEnvOrDefault("REDIS_PASSWORD", ""),
-			DB:        getEnvIntOrDefault("REDIS_DB", 0),
-			EnableTLS: getEnvOrDefault("REDIS_ENABLE_TLS", "false") == "true",
-		},
+	return &SetupConfig{
+		Database: databaseCfg,
+		Redis:    redisCfg,
 		Admin: AdminConfig{
 			Email:    getEnvOrDefault("ADMIN_EMAIL", "admin@sub2api.local"),
 			Password: getEnvOrDefault("ADMIN_PASSWORD", ""),
@@ -574,6 +582,175 @@ func AutoSetupFromEnv() error {
 			ExpireHour: getEnvIntOrDefault("JWT_EXPIRE_HOUR", 24),
 		},
 		Timezone: tz,
+	}, nil
+}
+
+func databaseConfigFromEnv() (DatabaseConfig, error) {
+	cfg := DatabaseConfig{
+		Host:     getEnvOrDefault("DATABASE_HOST", "localhost"),
+		Port:     getEnvIntOrDefault("DATABASE_PORT", 5432),
+		User:     getEnvOrDefault("DATABASE_USER", "postgres"),
+		Password: getEnvOrDefault("DATABASE_PASSWORD", ""),
+		DBName:   getEnvOrDefault("DATABASE_DBNAME", "sub2api"),
+		SSLMode:  getEnvOrDefault("DATABASE_SSLMODE", "disable"),
+	}
+
+	rawURL := firstNonEmptyEnv("DATABASE_URL", "DATABASE_DSN", "PG_DSN", "PGDSN")
+	if rawURL == "" {
+		return cfg, nil
+	}
+	if err := applyDatabaseURL(&cfg, rawURL); err != nil {
+		return cfg, err
+	}
+	cfg.ExternalDSN = true
+	return cfg, nil
+}
+
+func applyDatabaseURL(cfg *DatabaseConfig, raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("parse database url: %w", err)
+	}
+	switch parsed.Scheme {
+	case "postgres", "postgresql":
+	default:
+		return fmt.Errorf("database url scheme must be postgres or postgresql")
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("database url host is required")
+	}
+
+	cfg.Host = parsed.Hostname()
+	if parsed.Port() != "" {
+		port, err := strconv.Atoi(parsed.Port())
+		if err != nil || port <= 0 {
+			return fmt.Errorf("database url port is invalid: %q", parsed.Port())
+		}
+		cfg.Port = port
+	} else {
+		cfg.Port = 5432
+	}
+	if parsed.User != nil {
+		if user := parsed.User.Username(); user != "" {
+			cfg.User = user
+		}
+		if password, ok := parsed.User.Password(); ok {
+			cfg.Password = password
+		}
+	}
+	if dbName := strings.TrimPrefix(parsed.Path, "/"); dbName != "" {
+		decoded, err := url.PathUnescape(dbName)
+		if err != nil {
+			return fmt.Errorf("database url dbname is invalid: %w", err)
+		}
+		cfg.DBName = decoded
+	}
+	if sslMode := parsed.Query().Get("sslmode"); sslMode != "" {
+		cfg.SSLMode = sslMode
+	} else if _, explicitlySet := os.LookupEnv("DATABASE_SSLMODE"); !explicitlySet {
+		// PostgreSQL URLs are commonly used for managed databases (e.g. Supabase)
+		// where TLS is required. Local deployments can still pass ?sslmode=disable.
+		cfg.SSLMode = "require"
+	}
+	return nil
+}
+
+func redisConfigFromEnv() (RedisConfig, error) {
+	cfg := RedisConfig{
+		Host:      getEnvOrDefault("REDIS_HOST", "localhost"),
+		Port:      getEnvIntOrDefault("REDIS_PORT", 6379),
+		Password:  getEnvOrDefault("REDIS_PASSWORD", ""),
+		DB:        getEnvIntOrDefault("REDIS_DB", 0),
+		EnableTLS: getEnvOrDefault("REDIS_ENABLE_TLS", "false") == "true",
+	}
+
+	rawURL := firstNonEmptyEnv("REDIS_URL", "REDIS_DSN")
+	if rawURL == "" {
+		return cfg, nil
+	}
+	if err := applyRedisURL(&cfg, rawURL); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func applyRedisURL(cfg *RedisConfig, raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("parse redis url: %w", err)
+	}
+	switch parsed.Scheme {
+	case "redis":
+		cfg.EnableTLS = false
+	case "rediss":
+		cfg.EnableTLS = true
+	default:
+		return fmt.Errorf("redis url scheme must be redis or rediss")
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("redis url host is required")
+	}
+
+	cfg.Host = parsed.Hostname()
+	if parsed.Port() != "" {
+		port, err := strconv.Atoi(parsed.Port())
+		if err != nil || port <= 0 {
+			return fmt.Errorf("redis url port is invalid: %q", parsed.Port())
+		}
+		cfg.Port = port
+	} else {
+		cfg.Port = 6379
+	}
+	if parsed.User != nil {
+		if password, ok := parsed.User.Password(); ok {
+			cfg.Password = password
+		}
+	}
+	if dbPath := strings.Trim(parsed.Path, "/"); dbPath != "" {
+		db, err := strconv.Atoi(dbPath)
+		if err != nil || db < 0 {
+			return fmt.Errorf("redis url db is invalid: %q", dbPath)
+		}
+		cfg.DB = db
+	}
+	if queryDB := parsed.Query().Get("db"); queryDB != "" {
+		db, err := strconv.Atoi(queryDB)
+		if err != nil || db < 0 {
+			return fmt.Errorf("redis url db query is invalid: %q", queryDB)
+		}
+		cfg.DB = db
+	}
+	if tlsValue := strings.ToLower(strings.TrimSpace(parsed.Query().Get("tls"))); tlsValue != "" {
+		cfg.EnableTLS = tlsValue == "1" || tlsValue == "true" || tlsValue == "yes"
+	}
+	return nil
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if val := strings.TrimSpace(os.Getenv(key)); val != "" {
+			return val
+		}
+	}
+	return ""
+}
+
+// AutoSetupFromEnv performs automatic setup using environment variables
+// This is designed for Docker deployment where all config is passed via env vars
+func AutoSetupFromEnv() error {
+	logger.LegacyPrintf("setup", "%s", "Auto setup enabled, configuring from environment variables...")
+	logger.LegacyPrintf("setup", "Data directory: %s", GetDataDir())
+
+	// Get timezone from TZ or TIMEZONE env var (TZ is standard for Docker)
+	tz := getEnvOrDefault("TZ", "")
+	if tz == "" {
+		tz = getEnvOrDefault("TIMEZONE", "Asia/Shanghai")
+	}
+
+	// Build config from environment variables
+	cfg, err := setupConfigFromEnv(tz)
+	if err != nil {
+		return fmt.Errorf("environment config failed: %w", err)
 	}
 
 	// Generate JWT secret if not provided

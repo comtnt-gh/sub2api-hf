@@ -259,6 +259,50 @@ func TestAuthServiceRecordSuccessfulLoginBackfillsEmailIdentity(t *testing.T) {
 	require.Equal(t, user.ID, identity.UserID)
 }
 
+func TestAuthServiceRecordSuccessfulLoginSkipsWhenEmailIdentityOwnedByAnotherUser(t *testing.T) {
+	svc, _, client := newAuthServiceWithEnt(t, map[string]string{
+		service.SettingKeyRegistrationEnabled: "true",
+	}, nil)
+	ctx := context.Background()
+
+	passwordHash, err := svc.HashPassword("password")
+	require.NoError(t, err)
+	owner, err := client.User.Create().
+		SetEmail("owner@example.com").
+		SetUsername("owner-user").
+		SetPasswordHash(passwordHash).
+		SetBalance(1).
+		SetConcurrency(1).
+		SetRole(service.RoleUser).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+	user, err := client.User.Create().
+		SetEmail("shared@example.com").
+		SetUsername("shared-user").
+		SetPasswordHash(passwordHash).
+		SetBalance(1).
+		SetConcurrency(1).
+		SetRole(service.RoleUser).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = client.AuthIdentity.Create().
+		SetUserID(owner.ID).
+		SetProviderType("email").
+		SetProviderKey("email").
+		SetProviderSubject("shared@example.com").
+		SetVerifiedAt(time.Now().UTC()).
+		SetMetadata(map[string]any{"source": "preexisting"}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	require.NotPanics(t, func() {
+		svc.RecordSuccessfulLogin(ctx, user.ID)
+	})
+}
+
 func TestAuthServiceLogin_DoesNotApplyEmailFirstBindDefaultsWhenBackfillingLegacyEmailIdentity(t *testing.T) {
 	assigner := &authIdentityDefaultSubAssignerStub{}
 	svc, _, client := newAuthServiceWithEnt(t, map[string]string{

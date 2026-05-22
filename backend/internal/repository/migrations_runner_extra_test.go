@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"io/fs"
@@ -22,6 +23,8 @@ func TestApplyMigrations_NilDB(t *testing.T) {
 }
 
 func TestApplyMigrations_DelegatesToApplyMigrationsFS(t *testing.T) {
+	t.Setenv("MIGRATIONS_DISABLE_ADVISORY_LOCK", "false")
+
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
@@ -33,6 +36,39 @@ func TestApplyMigrations_DelegatesToApplyMigrationsFS(t *testing.T) {
 	err = ApplyMigrations(context.Background(), db)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "acquire migrations lock")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestApplyMigrations_CanDisableAdvisoryLock(t *testing.T) {
+	t.Setenv("MIGRATIONS_DISABLE_ADVISORY_LOCK", "true")
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS schema_migrations").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("information_schema\\.tables").
+		WithArgs("schema_migrations").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	err = applyMigrationsFS(context.Background(), db, fstest.MapFS{})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTableExistsTreatsNoRowsAsMissing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("information_schema\\.tables").
+		WithArgs("schema_migrations").
+		WillReturnError(sql.ErrNoRows)
+
+	exists, err := tableExists(context.Background(), db, "schema_migrations")
+	require.NoError(t, err)
+	require.False(t, exists)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -365,6 +365,9 @@ func TestLoadDefaultDatabaseSSLMode(t *testing.T) {
 	if cfg.Database.SSLMode != "prefer" {
 		t.Fatalf("Database.SSLMode = %q, want %q", cfg.Database.SSLMode, "prefer")
 	}
+	if !cfg.Database.BinaryParameters {
+		t.Fatalf("Database.BinaryParameters = false, want true")
+	}
 }
 
 func TestValidateLinuxDoFrontendRedirectURL(t *testing.T) {
@@ -711,12 +714,13 @@ func TestConfigAddressHelpers(t *testing.T) {
 	}
 
 	dbCfg := DatabaseConfig{
-		Host:     "localhost",
-		Port:     5432,
-		User:     "postgres",
-		Password: "",
-		DBName:   "sub2api",
-		SSLMode:  "disable",
+		Host:             "localhost",
+		Port:             5432,
+		User:             "postgres",
+		Password:         "",
+		DBName:           "sub2api",
+		SSLMode:          "disable",
+		BinaryParameters: true,
 	}
 	if !strings.Contains(dbCfg.DSN(), "password=") {
 	} else {
@@ -738,6 +742,9 @@ func TestConfigAddressHelpers(t *testing.T) {
 	}
 	if !strings.Contains(dbCfg.DSNWithTimezone("UTC"), "TimeZone=UTC") {
 		t.Fatalf("DatabaseConfig.DSNWithTimezone() should use provided timezone")
+	}
+	if !strings.Contains(dbCfg.DSNWithTimezone("UTC"), "binary_parameters=yes") {
+		t.Fatalf("DatabaseConfig.DSNWithTimezone() should include binary_parameters=yes")
 	}
 
 	redis := RedisConfig{Host: "redis", Port: 6379}
@@ -942,12 +949,13 @@ func TestGenerateJWTSecretWithLength(t *testing.T) {
 
 func TestDatabaseDSNWithTimezone_WithPassword(t *testing.T) {
 	d := &DatabaseConfig{
-		Host:     "localhost",
-		Port:     5432,
-		User:     "u",
-		Password: "p",
-		DBName:   "db",
-		SSLMode:  "prefer",
+		Host:             "localhost",
+		Port:             5432,
+		User:             "u",
+		Password:         "p",
+		DBName:           "db",
+		SSLMode:          "prefer",
+		BinaryParameters: true,
 	}
 	got := d.DSNWithTimezone("UTC")
 	if !strings.Contains(got, "password=p") {
@@ -955,6 +963,9 @@ func TestDatabaseDSNWithTimezone_WithPassword(t *testing.T) {
 	}
 	if !strings.Contains(got, "TimeZone=UTC") {
 		t.Fatalf("DSNWithTimezone should include TimeZone=UTC: %q", got)
+	}
+	if !strings.Contains(got, "binary_parameters=yes") {
+		t.Fatalf("DSNWithTimezone should include binary_parameters=yes: %q", got)
 	}
 }
 

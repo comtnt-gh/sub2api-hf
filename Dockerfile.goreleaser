@@ -21,6 +21,7 @@ RUN apk add --no-cache \
     ca-certificates \
     tzdata \
     curl \
+    redis \
     su-exec \
     libpq \
     zstd-libs \
@@ -45,8 +46,8 @@ WORKDIR /app
 # Copy pre-built binary from GoReleaser
 COPY sub2api /app/sub2api
 
-# Create data directory
-RUN mkdir -p /app/data && chown -R sub2api:sub2api /app
+# Create data directories
+RUN mkdir -p /app/data /app/redis && chown -R sub2api:sub2api /app
 
 # Copy entrypoint script (fixes volume permissions then drops to sub2api)
 COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh

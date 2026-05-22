@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -120,16 +121,18 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 		return errors.New("nil sql db")
 	}
 
-	// 获取分布式锁，确保多实例部署时只有一个实例执行迁移。
-	// 这是 PostgreSQL 特有的 Advisory Lock 机制。
-	if err := pgAdvisoryLock(ctx, db); err != nil {
-		return err
+	if migrationsAdvisoryLockEnabled() {
+		// 获取分布式锁，确保多实例部署时只有一个实例执行迁移。
+		// 这是 PostgreSQL 特有的 Advisory Lock 机制。
+		if err := pgAdvisoryLock(ctx, db); err != nil {
+			return err
+		}
+		defer func() {
+			// 无论迁移是否成功，都要释放锁。
+			// 使用 context.Background() 确保即使原 ctx 已取消也能释放锁。
+			_ = pgAdvisoryUnlock(context.Background(), db)
+		}()
 	}
-	defer func() {
-		// 无论迁移是否成功，都要释放锁。
-		// 使用 context.Background() 确保即使原 ctx 已取消也能释放锁。
-		_ = pgAdvisoryUnlock(context.Background(), db)
-	}()
 
 	// 创建迁移记录表（如果不存在）。
 	// 该表记录所有已应用的迁移及其校验和。
@@ -220,7 +223,7 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 					return fmt.Errorf("apply migration %s (non-tx statement %d): %w", name, i+1, err)
 				}
 			}
-			if _, err := db.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
+			if _, err := db.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2) ON CONFLICT (filename) DO NOTHING", name, checksum); err != nil {
 				return fmt.Errorf("record migration %s (non-tx): %w", name, err)
 			}
 			continue
@@ -239,7 +242,7 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 		}
 
 		// 记录迁移已完成，保存文件名和校验和
-		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2) ON CONFLICT (filename) DO NOTHING", name, checksum); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("record migration %s: %w", name, err)
 		}
@@ -388,6 +391,9 @@ func tableExists(ctx context.Context, db *sql.DB, tableName string) (bool, error
 			WHERE table_schema = 'public' AND table_name = $1
 		)
 	`, tableName).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	return exists, err
 }
 
@@ -528,6 +534,11 @@ func pgAdvisoryLock(ctx context.Context, db *sql.DB) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func migrationsAdvisoryLockEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("MIGRATIONS_DISABLE_ADVISORY_LOCK")))
+	return value != "1" && value != "true" && value != "yes"
 }
 
 // pgAdvisoryUnlock 释放 PostgreSQL Advisory Lock。
