@@ -1,5 +1,11 @@
 docs/claude-relay-service/
 .codex
+!.codex/
+.codex/*
+!.codex/skills/
+.codex/skills/*
+!.codex/skills/sync-upstream/
+!.codex/skills/sync-upstream/**
 
 # ===================
 # Go 后端
@@ -119,6 +125,8 @@ tests
 CLAUDE.md
 .claude
 scripts
+!.codex/skills/sync-upstream/scripts/
+!.codex/skills/sync-upstream/scripts/**
 .code-review-state
 #openspec/
 code-reviews/
@@ -132,7 +140,6 @@ docs/*
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
 .serena/
-.codex/
 frontend/coverage/
 aicodex
 output/

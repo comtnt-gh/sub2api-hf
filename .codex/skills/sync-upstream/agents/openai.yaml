@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sync Upstream"
+  short_description: "同步 sub2api-hf 上游并保留部署适配流程"
+  default_prompt: "Use $sync-upstream to sync sub2api-hf with upstream/main and preserve the HF/GHCR deployment adaptations."
