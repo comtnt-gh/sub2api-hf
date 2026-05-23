@@ -121,6 +121,7 @@ verify_sensitive_scan() {
 
   hits="$(rg -n --hidden \
     --glob '!/.git/**' \
+    --glob '!/.codex/skills/sync-upstream/scripts/sync_sub2api_hf_upstream.sh' \
     --glob '!node_modules/**' \
     --glob '!frontend/node_modules/**' \
     --glob '!backend/tmp/**' \
