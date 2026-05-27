@@ -1,16 +1,19 @@
 #!/bin/sh
 set -e
 
+APP_BIN="${APP_BIN:-/app/server}"
+APP_USER="${APP_USER:-appsvc}"
+
 # Fix data directory permissions when running as root.
 # Docker named volumes / host bind-mounts may be owned by root,
-# preventing the non-root sub2api user from writing files.
+# preventing the non-root runtime user from writing files.
 if [ "$(id -u)" = "0" ]; then
     mkdir -p /app/data /app/redis
     # Use || true to avoid failure on read-only mounted files (e.g. config.yaml:ro)
-    chown -R sub2api:sub2api /app/data /app/redis 2>/dev/null || true
-    # Re-invoke this script as sub2api so the flag-detection below
+    chown -R "$APP_USER:$APP_USER" /app/data /app/redis 2>/dev/null || true
+    # Re-invoke this script as the runtime user so the flag-detection below
     # also runs under the correct user.
-    exec su-exec sub2api "$0" "$@"
+    exec su-exec "$APP_USER" "$0" "$@"
 fi
 
 should_start_embedded_redis() {
@@ -90,12 +93,12 @@ stop_embedded_redis() {
 
 # Compatibility: if the first arg looks like a flag (e.g. --help),
 # prepend the default binary so it behaves the same as the old
-# ENTRYPOINT ["/app/sub2api"] style.
+# single-binary entrypoint style.
 if [ "${1#-}" != "$1" ]; then
-    set -- /app/sub2api "$@"
+    set -- "$APP_BIN" "$@"
 fi
 
-if [ "$1" = "/app/sub2api" ] || [ "$1" = "sub2api" ]; then
+if [ "$1" = "$APP_BIN" ] || [ "$1" = "server" ]; then
     if start_embedded_redis; then
         "$@" &
         APP_PID="$!"

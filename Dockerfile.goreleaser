@@ -38,18 +38,18 @@ COPY --from=pg-client /usr/local/bin/psql /usr/local/bin/psql
 COPY --from=pg-client /usr/local/lib/libpq.so.5* /usr/local/lib/
 
 # Create non-root user
-RUN addgroup -g 1000 sub2api && \
-    adduser -u 1000 -G sub2api -s /bin/sh -D sub2api
+RUN addgroup -g 1000 appsvc && \
+    adduser -u 1000 -G appsvc -s /bin/sh -D appsvc
 
 WORKDIR /app
 
 # Copy pre-built binary from GoReleaser
-COPY sub2api /app/sub2api
+COPY sub2api /app/server
 
 # Create data directories
-RUN mkdir -p /app/data /app/redis && chown -R sub2api:sub2api /app
+RUN mkdir -p /app/data /app/redis && chown -R appsvc:appsvc /app
 
-# Copy entrypoint script (fixes volume permissions then drops to sub2api)
+# Copy entrypoint script (fixes volume permissions then drops to the runtime user)
 COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
@@ -58,6 +58,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:${SERVER_PORT:-8080}/health || exit 1
 
-# Run the application (entrypoint fixes /app/data ownership then execs as sub2api)
+# Run the application (entrypoint fixes /app/data ownership then execs as appsvc)
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["/app/sub2api"]
+CMD ["/app/server"]
